@@ -4,6 +4,7 @@ Telegram-бот для поиска фильмов через API Кинопои
 
 ## Возможности
 
+
 - 📋 Получение списка всех доступных жанров
 - 🔍 Поиск фильмов по жанру
 - ⭐ Отображение рейтингов фильмов
@@ -26,18 +27,35 @@ git clone <repository-url>
 cd Cursor_bot_kinopoisk
 ```
 
-2. Установите зависимости:
+2. Создайте и активируйте виртуальное окружение:
 
 **Для Windows (PowerShell):**
 ```powershell
-python -m pip install -r requirements.txt
+# Создание виртуального окружения
+python -m venv venv
+
+# Активация виртуального окружения
+.\venv\Scripts\Activate.ps1
 ```
-или
+
+Если возникает ошибка выполнения скриптов, выполните:
 ```powershell
-py -m pip install -r requirements.txt
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+**Для Windows (CMD):**
+```cmd
+python -m venv venv
+venv\Scripts\activate.bat
 ```
 
 **Для Linux/Mac:**
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+3. Установите зависимости:
 ```bash
 pip install -r requirements.txt
 ```
@@ -56,18 +74,34 @@ pip install -r requirements.txt
 
 ## Запуск
 
-**Для Windows:**
+**Важно:** Перед запуском убедитесь, что виртуальное окружение активировано!
+
+**Для Windows (PowerShell):**
 ```powershell
+# Активация виртуального окружения (если еще не активировано)
+.\venv\Scripts\Activate.ps1
+
+# Запуск бота
 python main.py
 ```
-или
-```powershell
-py main.py
+
+**Для Windows (CMD):**
+```cmd
+venv\Scripts\activate.bat
+python main.py
 ```
 
 **Для Linux/Mac:**
 ```bash
+source venv/bin/activate
 python main.py
+```
+
+### Деактивация виртуального окружения
+
+После завершения работы с проектом:
+```bash
+deactivate
 ```
 
 ## Команды бота
@@ -101,3 +135,8 @@ Cursor_bot_kinopoisk/
 - [aiogram](https://docs.aiogram.dev/) - асинхронный фреймворк для Telegram ботов
 - [aiohttp](https://docs.aiohttp.org/) - асинхронный HTTP клиент
 - [python-dotenv](https://pypi.org/project/python-dotenv/) - загрузка переменных окружения
+
+## Дополнительная документация
+
+- [VENV_GUIDE.md](VENV_GUIDE.md) - Подробное руководство по работе с виртуальным окружением
+- [INSTALL_WINDOWS.md](INSTALL_WINDOWS.md) - Инструкция по установке для Windows

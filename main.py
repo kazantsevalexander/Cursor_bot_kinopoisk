@@ -13,6 +13,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+
 async def main():
     """Главная функция для запуска бота"""
     # Проверяем конфигурацию
