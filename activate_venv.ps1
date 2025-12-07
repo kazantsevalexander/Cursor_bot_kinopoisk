@@ -10,3 +10,4 @@ if (Test-Path "venv\Scripts\Activate.ps1") {
     Write-Host "Или используйте скрипт: .\setup_venv.ps1" -ForegroundColor Yellow
 }
 
+

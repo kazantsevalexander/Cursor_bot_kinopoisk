@@ -4,7 +4,6 @@
     "executionEnvironments": [
         {
             "root": ".",
-            "pythonVersion": "3.8",
             "pythonPlatform": "Windows",
             "extraPaths": [
                 "venv/Lib/site-packages"

@@ -65,3 +65,4 @@ py -m pip install -r requirements.txt
 - **BOT_TOKEN:** Получите у [@BotFather](https://t.me/BotFather) в Telegram
 - **KINOPOISK_API_KEY:** Получите на [kinopoiskapiunofficial.tech](https://kinopoiskapiunofficial.tech/)
 
+
