@@ -38,7 +38,7 @@ async def main():
     commands_list = [
         BotCommand(command="start", description="🔄 Главное меню"),
         BotCommand(command="help", description="👁 Помощь"),
-        
+
         # Поиск
         BotCommand(command="search_film", description="🔎 Поиск по названию"),
         BotCommand(command="genres", description="🎭 Поиск по жанру"),
