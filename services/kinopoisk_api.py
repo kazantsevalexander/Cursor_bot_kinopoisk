@@ -2,7 +2,10 @@ import aiohttp
 from typing import List, Dict, Optional
 from config.config import Config
 
+
 class KinopoiskAPI:
+    """Класс для работы с API Кинопоиска"""
+
     def __init__(self):
         self.api_key = Config.KINOPOISK_API_KEY
         self.base_url = Config.KINOPOISK_API_URL
@@ -26,6 +29,7 @@ class KinopoiskAPI:
         response = await self._make_request("v2.2/films/filters")
         return response.get('genres', []) if 'error' not in response else []
 
+    # --- НОВЫЙ МЕТОД: ПОЛУЧЕНИЕ СТРАН ---
     async def get_countries(self) -> List[Dict]:
         response = await self._make_request("v2.2/films/filters")
         return response.get('countries', []) if 'error' not in response else []
@@ -34,6 +38,7 @@ class KinopoiskAPI:
         params = {'genres': genre_id, 'page': page, 'order': 'RATING', 'type': 'FILM'}
         return await self._make_request("v2.2/films", params)
 
+    # --- НОВЫЙ МЕТОД: ПОИСК ПО СТРАНЕ ---
     async def search_films_by_country(self, country_id: int, page: int = 1) -> Dict:
         params = {'countries': country_id, 'page': page, 'order': 'RATING', 'type': 'FILM'}
         return await self._make_request("v2.2/films", params)
@@ -42,7 +47,8 @@ class KinopoiskAPI:
         params = {'genres': genre_ids, 'page': page, 'order': 'RATING', 'type': 'FILM'}
         return await self._make_request("v2.2/films", params)
 
-    async def search_films_by_year(self, year: Optional[int] = None, year_from: Optional[int] = None, year_to: Optional[int] = None, page: int = 1) -> Dict:
+    async def search_films_by_year(self, year: Optional[int] = None, year_from: Optional[int] = None,
+                                   year_to: Optional[int] = None, page: int = 1) -> Dict:
         params = {'page': page, 'order': 'RATING', 'type': 'FILM'}
         if year:
             params['yearFrom'] = params['yearTo'] = year
@@ -68,11 +74,6 @@ class KinopoiskAPI:
                     name = person.get('nameRu') or person.get('nameEn')
                     if name: directors.append(name)
         return ", ".join(directors[:1]) if directors else "Не указано"
-
-    async def get_similars(self, film_id: int) -> List[Dict]:
-        """Получает список похожих фильмов"""
-        response = await self._make_request(f"v2.2/films/{film_id}/similars")
-        return response.get('items', []) if 'error' not in response else []
 
     async def search_films_by_person(self, person_id: int, profession_key: str = 'ACTOR') -> Dict:
         data = await self._make_request(f"v1/staff/{person_id}")
@@ -102,3 +103,11 @@ class KinopoiskAPI:
         if 'error' in response: return response
         items = response.get('films', [])
         return {'items': items, 'total': response.get('searchFilmsCountResult', len(items))}
+
+    async def get_similars(self, film_id: int) -> List[Dict]:
+        """Получает список похожих фильмов"""
+        # Эндпоинт возвращает словарь {'items': [...], 'total': ...}
+        response = await self._make_request(f"v2.2/films/{film_id}/similars")
+        if 'error' in response:
+            return []
+        return response.get('items', [])
