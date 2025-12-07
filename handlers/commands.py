@@ -19,7 +19,8 @@ class FilmSearchStates(StatesGroup):
     waiting_for_director_name = State()
     waiting_for_film_name = State()
 
-# --- ФУНКЦИЯ ОТПРАВКИ РЕЗУЛЬТАТОВ ---
+
+# --- ФУНКЦИЯ ОТПРАВКИ РЕЗУЛЬТАТОВ (ОБНОВЛЕННАЯ) ---
 async def send_film_results(message: Message, films: list, title: str):
     if not films:
         await message.answer("😔 Фильмы не найдены.")
@@ -37,17 +38,30 @@ async def send_film_results(message: Message, films: list, title: str):
         if rating == 'null': rating = 'N/A'
         film_id = film.get('kinopoiskId') or film.get('filmId')
 
-        # Пытаемся найти постер в разных полях (API возвращает их по-разному в разных методах)
+        # --- 1. ОБРАБОТКА СТРАН ---
+        countries_list = film.get('countries', [])
+        # Собираем названия стран в строку через запятую (берем первые 3, чтобы не было слишком длинно)
+        if countries_list:
+            countries_str = ", ".join([c.get('country', '') for c in countries_list[:3]])
+        else:
+            countries_str = "Не указано"
+
+        # --- 2. ФОРМИРОВАНИЕ ССЫЛКИ ---
+        kp_link = f"https://www.kinopoisk.ru/film/{film_id}/"
+
+        # Постер
         poster_url = film.get('posterUrlPreview') or film.get('posterUrl')
 
         en_text = f"🇬🇧 {name_en}\n" if name_en else ""
 
+        # --- ОБНОВЛЕННАЯ ПОДПИСЬ ---
         caption = (
             f"🎬 <b>{name_ru}</b>\n"
             f"{en_text}"
+            f"🌍 Страна: {countries_str}\n"
             f"📅 Год: {year}\n"
             f"⭐ Рейтинг: {rating}\n"
-            f"🔗 ID на Кинопоиске: <code>{film_id}</code>"
+            f"🔗 <a href='{kp_link}'>Перейти на Кинопоиск</a>"
         )
 
         try:
@@ -60,15 +74,21 @@ async def send_film_results(message: Message, films: list, title: str):
 
         await asyncio.sleep(0.3)
 
+    # Список остальных фильмов (текстовый)
     if len(films) > 5:
         remaining = films[5:15]
         text_list = "<b>⬇️ Другие фильмы по запросу:</b>\n\n"
         for i, film in enumerate(remaining, 6):
             name = film.get('nameRu') or film.get('nameOriginal')
             year = film.get('year')
-            text_list += f"{i}. {name} ({year})\n"
+            f_id = film.get('kinopoiskId') or film.get('filmId')
+            # Добавляем ссылку и в текстовый список
+            link = f"https://www.kinopoisk.ru/film/{f_id}/"
 
-        await message.answer(text_list)
+            text_list += f"{i}. <a href='{link}'>{name}</a> ({year})\n"
+
+        # Отключаем предпросмотр ссылок, чтобы не спамить мини-картинками в текстовом списке
+        await message.answer(text_list, disable_web_page_preview=True)
 
 
 # --- ОБРАБОТЧИКИ КОМАНД ---
@@ -77,7 +97,7 @@ async def send_film_results(message: Message, films: list, title: str):
 async def cmd_start(message: Message):
     await message.answer(
         "🎬 <b>Кинопоиск Бот</b>\n\n"
-        "🔍 <b>/search_film - Поиск по названию</b>\n"  # <--- Добавлено
+        "🔍 <b>/search_film - Поиск по названию</b>\n"
         "🎭 /genres - Выбрать жанр\n"
         "📅 /search_year - Поиск по году\n"
         "👤 /search_actor - Поиск по актёру\n"
@@ -164,7 +184,7 @@ async def process_year(message: Message, state: FSMContext):
         await message.answer("❌ Некорректный формат.")
 
 
-# --- ОБНОВЛЕННАЯ ЛОГИКА ПОИСКА ПО ПЕРСОНЕ ---
+# --- ПОИСК ПО ПЕРСОНЕ ---
 async def process_person_search(message: Message, state: FSMContext, profession: str):
     name = message.text.strip()
     await message.answer(f"⏳ Ищу: {name}...")
@@ -181,7 +201,7 @@ async def process_person_search(message: Message, state: FSMContext, profession:
 
     await message.answer(f"👤 Найдена персона: <b>{p_name}</b>. Загружаю фильмографию...")
 
-    # 1. Получаем список фильмов (без постеров)
+    # 1. Получаем список фильмов
     result = await kinopoisk_api.search_films_by_person(pid, profession)
 
     if 'error' in result:
@@ -196,31 +216,26 @@ async def process_person_search(message: Message, state: FSMContext, profession:
         await state.clear()
         return
 
-    # 2. Берем топ-5 фильмов и подгружаем для них постеры
-    await message.answer("⏳ Подгружаю постеры для лучших фильмов...")
+    # 2. Берем топ-5 фильмов и подгружаем для них детали (страны, постеры)
+    await message.answer("⏳ Подгружаю детали для лучших фильмов...")
 
     top_5_films = films[:5]
     remaining_films = films[5:]
 
-    # Создаем задачи для параллельной загрузки деталей фильмов
     tasks = []
     for film in top_5_films:
         fid = film.get('filmId') or film.get('kinopoiskId')
         tasks.append(kinopoisk_api.get_film_details(fid))
 
-    # Выполняем запросы параллельно (чтобы было быстро)
     details_results = await asyncio.gather(*tasks)
 
     enriched_top_5 = []
     for original, details in zip(top_5_films, details_results):
         if 'error' not in details:
-            # Если успешно получили детали, используем их (там есть постер)
             enriched_top_5.append(details)
         else:
-            # Если ошибка, оставляем старые данные (без постера)
             enriched_top_5.append(original)
 
-    # Объединяем обогащенные топ-5 и остальные фильмы
     final_list = enriched_top_5 + remaining_films
 
     role = "Актёр" if profession == 'ACTOR' else "Режиссёр"
@@ -253,14 +268,12 @@ async def process_director(message: Message, state: FSMContext):
 
 @router.message(Command("search_film"))
 async def cmd_search_film(message: Message, state: FSMContext):
-    """Запрашивает название фильма"""
     await message.answer("🔎 Введите название фильма или сериала:")
     await state.set_state(FilmSearchStates.waiting_for_film_name)
 
 
 @router.message(FilmSearchStates.waiting_for_film_name)
 async def process_film_name(message: Message, state: FSMContext):
-    """Обрабатывает ввод названия и ищет фильм"""
     film_name = message.text.strip()
 
     if not film_name:
@@ -269,7 +282,6 @@ async def process_film_name(message: Message, state: FSMContext):
 
     await message.answer(f"⏳ Ищу «{film_name}»...")
 
-    # Выполняем поиск
     result = await kinopoisk_api.search_films_by_keyword(film_name)
 
     if 'error' in result:
@@ -278,8 +290,6 @@ async def process_film_name(message: Message, state: FSMContext):
         return
 
     films = result.get('items', [])
-
-    # Отправляем результаты (постеры уже есть в ответе v2.1, доп. запросы не нужны)
     await send_film_results(message, films, f"🔎 Результаты поиска по запросу «{film_name}»")
 
     await state.clear()
