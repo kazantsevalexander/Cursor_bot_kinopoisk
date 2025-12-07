@@ -1,7 +1,7 @@
 import asyncio
 import random
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -23,12 +23,22 @@ class FilmSearchStates(StatesGroup):
     waiting_for_country = State()
 
 
-# --- КЛАВИАТУРА ---
+# --- ГЛАВНОЕ МЕНЮ (КНОПКИ ВНИЗУ) ---
+def get_main_menu():
+    kb = [
+        [KeyboardButton(text="🔎 Поиск фильма"), KeyboardButton(text="🎲 Рекомендация")],
+        [KeyboardButton(text="🎭 Жанры"), KeyboardButton(text="📅 По годам")],
+        [KeyboardButton(text="👁 Мои фильмы"), KeyboardButton(text="👤 Мой профиль")]
+    ]
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
+
+# --- КНОПКИ ПОД ФИЛЬМОМ ---
 def get_film_keyboard(film_id: int):
     builder = InlineKeyboardBuilder()
     builder.button(text="👁 Просмотрено", callback_data=f"act_watched_{film_id}")
-    builder.button(text="🔖 Буду смотреть", callback_data=f"act_plan_{film_id}")
-    builder.button(text="👎 Не интересно", callback_data=f"act_ignore_{film_id}")
+    builder.button(text="🔖 В планы", callback_data=f"act_plan_{film_id}")
+    builder.button(text="👎 Скрыть", callback_data=f"act_ignore_{film_id}")
     builder.adjust(2, 1)
     return builder.as_markup()
 
@@ -36,162 +46,114 @@ def get_film_keyboard(film_id: int):
 # --- ОТПРАВКА РЕЗУЛЬТАТОВ ---
 async def send_film_results(message: Message, films: list, title: str, user_id: int):
     if not films:
-        await message.answer("😔 Фильмы не найдены.")
+        await message.answer("😔 Ничего не найдено.", reply_markup=get_main_menu())
         return
 
     excluded_ids = await db.get_user_excluded_ids(user_id)
-    filtered_films = []
-    for f in films:
-        fid = f.get('kinopoiskId') or f.get('filmId')
-        if fid and fid not in excluded_ids:
-            filtered_films.append(f)
+    filtered_films = [f for f in films if (f.get('kinopoiskId') or f.get('filmId')) not in excluded_ids]
 
     if not filtered_films:
-        await message.answer(f"{title}\n\n🎉 Все фильмы из этой выборки вы уже видели или скрыли!")
+        await message.answer(f"{title}\n\n🎉 Вы уже видели все фильмы из этого списка!", reply_markup=get_main_menu())
         return
 
     if title:
-        await message.answer(f"{title} (Топ результатов):")
+        await message.answer(f"{title} (Топ результатов):", reply_markup=get_main_menu())
 
     top_films = filtered_films[:5]
-
-    # Загружаем режиссеров параллельно
     director_tasks = [kinopoisk_api.get_directors(f.get('kinopoiskId') or f.get('filmId')) for f in top_films]
     directors_list = await asyncio.gather(*director_tasks)
 
     for film, director_name in zip(top_films, directors_list):
         name_ru = film.get('nameRu') or film.get('nameOriginal') or 'Без названия'
-        name_en = film.get('nameEn') or ''
-        year = film.get('year')
+        year = film.get('year') or ''
         rating = film.get('rating') or film.get('ratingKinopoisk') or 'N/A'
         if rating == 'null': rating = 'N/A'
         film_id = film.get('kinopoiskId') or film.get('filmId')
 
-        # Жанры
-        genres_list = film.get('genres', [])
-        genres_str = ", ".join(
-            [g.get('genre', '') for g in genres_list[:3]]).capitalize() if genres_list else "Не указано"
-
-        # Страны
-        countries_list = film.get('countries', [])
-        countries_str = ", ".join(
-            [c.get('country', '') for c in countries_list[:3]]) if countries_list else "Не указано"
-
-        # Возраст
-        age_limit = film.get('ratingAgeLimits')
-        age_str = f" | {age_limit.replace('age', '')}+" if age_limit else ""
-
+        genres = ", ".join([g.get('genre', '') for g in film.get('genres', [])[:2]]).capitalize()
+        countries = ", ".join([c.get('country', '') for c in film.get('countries', [])[:2]])
+        poster = film.get('posterUrlPreview') or film.get('posterUrl')
         kp_link = f"https://www.kinopoisk.ru/film/{film_id}/"
-        poster_url = film.get('posterUrlPreview') or film.get('posterUrl')
-        en_text = f"🇬🇧 {name_en}\n" if name_en else ""
 
         caption = (
-            f"🎬 <b>{name_ru}</b>{age_str}\n"
-            f"{en_text}"
-            f"🎭 Жанр: {genres_str}\n"
-            f"🎥 Режиссёр: {director_name}\n"
-            f"🌍 Страна: {countries_str}\n"
-            f"📅 Год: {year}\n"
-            f"⭐ Рейтинг: {rating}\n"
-            f"🔗 <a href='{kp_link}'>Перейти на Кинопоиск</a>"
+            f"🎬 <b>{name_ru}</b> ({year})\n"
+            f"⭐ {rating} | 🎭 {genres}\n"
+            f"🎥 {director_name} | 🌍 {countries}\n"
+            f"🔗 <a href='{kp_link}'>Кинопоиск</a>"
         )
 
-        keyboard = get_film_keyboard(film_id)
-
         try:
-            if poster_url:
-                await message.answer_photo(photo=poster_url, caption=caption, reply_markup=keyboard)
+            if poster:
+                await message.answer_photo(poster, caption=caption, reply_markup=get_film_keyboard(film_id))
             else:
-                await message.answer(caption, reply_markup=keyboard)
+                await message.answer(caption, reply_markup=get_film_keyboard(film_id))
         except Exception:
-            await message.answer(caption, reply_markup=keyboard)
+            await message.answer(caption, reply_markup=get_film_keyboard(film_id))
 
         await asyncio.sleep(0.3)
 
-    # Список дополнительных фильмов
     if len(filtered_films) > 5:
-        remaining = filtered_films[5:15]
-        text_list = "<b>⬇️ Нажмите на команду, чтобы открыть карточку:</b>\n\n"
-        for i, film in enumerate(remaining, 6):
+        text_list = "<b>⬇️ Ещё варианты (нажмите для карточки):</b>\n\n"
+        for i, film in enumerate(filtered_films[5:15], 6):
             name = film.get('nameRu') or film.get('nameOriginal')
             year = film.get('year') or '?'
-            f_id = film.get('kinopoiskId') or film.get('filmId')
-            text_list += f"{i}. /film_{f_id} — <b>{name}</b> ({year})\n"
-
+            fid = film.get('kinopoiskId') or film.get('filmId')
+            text_list += f"{i}. /film_{fid} — {name} ({year})\n"
         await message.answer(text_list)
 
 
-# --- ОТКРЫТИЕ КАРТОЧКИ ПО КЛИКУ ---
-@router.message(F.text.regexp(r"^/film_(\d+)$"))
-async def show_one_film(message: Message, state: FSMContext):
-    await state.clear()
-    try:
-        film_id = int(message.text.split('_')[1])
-        await message.answer("⏳ Загружаю информацию...")
-        film = await kinopoisk_api.get_film_details(film_id)
-        if 'error' in film:
-            await message.answer("❌ Не удалось загрузить информацию о фильме.")
-            return
-        await send_film_results(message, [film], "", message.from_user.id)
-    except Exception as e:
-        print(f"Error showing film: {e}")
-        await message.answer("❌ Ошибка при открытии фильма.")
+# --- ОБРАБОТКА ТЕКСТОВЫХ КНОПОК МЕНЮ ---
+@router.message(F.text == "🔎 Поиск фильма")
+async def menu_search(message: Message, state: FSMContext):
+    await cmd_search_film(message, state)
 
 
-# --- ОБРАБОТЧИКИ ДЕЙСТВИЙ ---
-@router.callback_query(F.data.startswith("act_"))
-async def process_film_action(callback: CallbackQuery):
-    try:
-        _, action_type, film_id_str = callback.data.split("_")
-        film_id = int(film_id_str)
-        user_id = callback.from_user.id
+@router.message(F.text == "🎲 Рекомендация")
+async def menu_recommend(message: Message, state: FSMContext):
+    await cmd_recommend(message, state)
 
-        try:
-            details = await kinopoisk_api.get_film_details(film_id)
-            title = details.get('nameRu') or details.get('nameOriginal') or 'Фильм'
-        except:
-            title = 'Фильм'
 
-        if action_type == 'watched':
-            await db.add_film_to_list(user_id, film_id, title, 'watched')
-            await callback.answer(f"✅ Добавлено в просмотренные")
-        elif action_type == 'plan':
-            await db.add_film_to_list(user_id, film_id, title, 'plan')
-            await callback.answer(f"🔖 Добавлено в планы")
-        elif action_type == 'ignore':
-            await db.add_film_to_list(user_id, film_id, title, 'ignored')
-            await callback.answer()
-            try:
-                await callback.message.delete()
-            except:
-                await callback.message.edit_reply_markup(reply_markup=None)
-    except Exception as e:
-        print(f"Error: {e}")
-        await callback.answer()
+@router.message(F.text == "🎭 Жанры")
+async def menu_genres(message: Message, state: FSMContext):
+    await cmd_genres(message, state)
+
+
+@router.message(F.text == "📅 По годам")
+async def menu_years(message: Message, state: FSMContext):
+    await cmd_search_year(message, state)
+
+
+@router.message(F.text == "👁 Мои фильмы")
+async def menu_lists(message: Message, state: FSMContext):
+    await cmd_my_watched(message, state)
+
+
+@router.message(F.text == "👤 Мой профиль")
+async def menu_profile(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    watched, plan = await db.get_user_stats(user_id)
+    genres = await db.get_user_genres(user_id)
+
+    text = (
+        f"👤 <b>Ваш профиль</b>\n\n"
+        f"👁 Просмотрено: <b>{watched}</b>\n"
+        f"🔖 В планах: <b>{plan}</b>\n"
+        f"🎭 Любимые жанры (ID): {genres if genres else 'Не выбраны'}\n\n"
+        f"<i>Бот обучается, когда вы ищете жанры или отмечаете фильмы.</i>"
+    )
+    await message.answer(text, reply_markup=get_main_menu())
 
 
 # --- КОМАНДЫ ---
-
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     await db.add_user(message.from_user.id)
     await message.answer(
-        "🎬 <b>Кинопоиск Бот: Полная версия</b>\n\n"
-        "<b>🔎 Поиск:</b>\n"
-        "/search_film - По названию\n"
-        "/genres - По жанру\n"
-        "/search_year - По году\n"
-        "/countries - По стране\n"
-        "/search_actor - По актёру\n"
-        "/search_director - По режиссёру\n\n"
-        "<b>👤 Личное:</b>\n"
-        "/recommend - <b>Мне повезет</b>\n"
-        "/my_watched - Список просмотренного\n"
-        "/my_plan - Буду смотреть\n"
-        "/save_genres - Настроить вкусы"
+        "👋 Привет! Я помогу найти фильм.\n"
+        "Используй кнопки внизу экрана 👇",
+        reply_markup=get_main_menu()
     )
-
 
 @router.message(Command("help"))
 async def cmd_help(message: Message, state: FSMContext):
@@ -224,261 +186,142 @@ async def cmd_help(message: Message, state: FSMContext):
         "<i>💡 Совет: Если вы видите в списке команду вида /film_12345, нажмите на неё, чтобы открыть подробную карточку фильма.</i>"
     )
     await message.answer(help_text)
-
-
-# --- ЖАНРЫ ---
+    
 @router.message(Command("genres"))
 async def cmd_genres(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("⏳ Загружаю жанры...")
     genres = await kinopoisk_api.get_genres()
-    if not genres:
-        await message.answer("❌ Ошибка API")
-        return
+    if not genres: return
     builder = InlineKeyboardBuilder()
     for genre in genres[:20]:
         builder.button(text=genre['genre'], callback_data=f"genre_{genre['id']}")
     builder.adjust(2)
     await message.answer("🎭 Выберите жанр:", reply_markup=builder.as_markup())
-    text_ids = "\n".join([f"{g['genre']}: {g['id']}" for g in genres[:20]])
-    await message.answer(f"📋 <b>ID жанров (для /save_genres):</b>\n{text_ids}")
 
 
 @router.callback_query(F.data.startswith("genre_"))
 async def process_genre_callback(callback: CallbackQuery):
     genre_id = int(callback.data.split("_")[1])
-    await callback.message.answer(f"⏳ Ищу фильмы...")
+    # АВТОМАТИЧЕСКОЕ ЗАПОМИНАНИЕ ЖАНРА
+    await db.update_user_genres(callback.from_user.id, genre_id)
+
+    await callback.message.answer(f"✅ Жанр запомнил! Ищу фильмы...")
     result = await kinopoisk_api.search_films_by_genre(genre_id)
-    await send_film_results(callback.message, result.get('items', []), "🎭 Результаты по жанру", callback.from_user.id)
+    await send_film_results(callback.message, result.get('items', []), "🎭 Результаты", callback.from_user.id)
     await callback.answer()
 
 
-# --- СТРАНЫ ---
-@router.message(Command("countries"))
-async def cmd_countries(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("⏳ Загружаю список стран...")
-    countries = await kinopoisk_api.get_countries()
-    if not countries:
-        await message.answer("❌ Ошибка API")
-        return
-    text = "🌍 <b>Популярные страны (ID):</b>\n\n"
-    for c in countries[:30]:
-        text += f"• {c['country']}: <code>{c['id']}</code>\n"
-    text += "\n👇 Введите команду /search_country и ID страны."
-    await message.answer(text)
-
-
-@router.message(Command("search_country"))
-async def cmd_search_country(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("🌍 Введите ID страны (например, 1 для США, 2 для России):")
-    await state.set_state(FilmSearchStates.waiting_for_country)
-
-
-@router.message(FilmSearchStates.waiting_for_country)
-async def process_country(message: Message, state: FSMContext):
-    if not message.text.isdigit():
-        await message.answer("❌ Введите числовой ID.")
-        return
-    country_id = int(message.text)
-    await message.answer("⏳ Ищу фильмы...")
-    result = await kinopoisk_api.search_films_by_country(country_id)
-    await send_film_results(message, result.get('items', []), "🌍 Фильмы по стране", message.from_user.id)
-    await state.clear()
-
-
-# --- ГОД ---
-@router.message(Command("search_year"))
-async def cmd_search_year(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("📅 Введите год (2023) или интервал (2010-2015):")
-    await state.set_state(FilmSearchStates.waiting_for_year)
-
-
-@router.message(FilmSearchStates.waiting_for_year)
-async def process_year(message: Message, state: FSMContext):
-    text = message.text.strip()
-    year, y_from, y_to = None, None, None
-    try:
-        if '-' in text:
-            parts = text.split('-')
-            y_from, y_to = int(parts[0]), int(parts[1])
-        else:
-            year = int(text)
-        await message.answer("⏳ Ищу фильмы...")
-        result = await kinopoisk_api.search_films_by_year(year, y_from, y_to)
-        await send_film_results(message, result.get('items', []), "📅 Фильмы по году", message.from_user.id)
-        await state.clear()
-    except ValueError:
-        await message.answer("❌ Некорректный формат.")
-
-
-# --- УМНЫЕ РЕКОМЕНДАЦИИ ---
 @router.message(Command("recommend"))
 async def cmd_recommend(message: Message, state: FSMContext):
     await state.clear()
     user_id = message.from_user.id
-    await message.answer("🤔 Анализирую ваши предпочтения...")
+    await message.answer("🤔 Анализирую ваши вкусы...")
 
-    # 1. Ищем похожие на просмотренные
+    # 1. Похожие на просмотренные
     for _ in range(3):
-        watched_film = await db.get_random_watched_film(user_id)
-        if watched_film:
-            base_id, base_title = watched_film
-            similars = await kinopoisk_api.get_similars(base_id)
-            if not similars: continue
-
-            excluded_ids = await db.get_user_excluded_ids(user_id)
-            clean_similars = [f for f in similars if (f.get('filmId') or f.get('kinopoiskId')) not in excluded_ids]
-
-            if clean_similars:
-                await message.answer(f"💡 Вы смотрели <b>«{base_title}»</b>.\nВозможно, вам понравится:")
-                top_3 = clean_similars[:3]
-                tasks = [kinopoisk_api.get_film_details(f.get('filmId')) for f in top_3]
-                full_films = await asyncio.gather(*tasks)
-                valid_films = [f for f in full_films if 'error' not in f]
-                await send_film_results(message, valid_films, "", user_id)
+        watched = await db.get_random_watched_film(user_id)
+        if watched:
+            similars = await kinopoisk_api.get_similars(watched[0])
+            if similars:
+                await message.answer(f"💡 Так как вы смотрели <b>«{watched[1]}»</b>:")
+                # Подгружаем детали для топ-3
+                tasks = [kinopoisk_api.get_film_details(f.get('filmId')) for f in similars[:3]]
+                full = await asyncio.gather(*tasks)
+                valid = [f for f in full if 'error' not in f]
+                await send_film_results(message, valid, "", user_id)
                 return
 
-    # 2. Если нет просмотренных, используем жанры
+    # 2. По жанрам
     genres_str = await db.get_user_genres(user_id)
     if genres_str:
-        try:
-            genre_ids = [int(g) for g in genres_str.split(',')]
-            target_genre = random.choice(genre_ids)
-            await message.answer("🎲 Подбираю фильм на основе ваших любимых жанров...")
-            random_page = random.randint(1, 5)
-            result = await kinopoisk_api.search_films_by_genre(target_genre, page=random_page)
-            films = result.get('items', [])
-            if not films:
-                result = await kinopoisk_api.search_films_by_genre(target_genre, page=1)
-                films = result.get('items', [])
-            await send_film_results(message, films, "🎲 Рекомендация по жанру", user_id)
-            return
-        except Exception:
-            pass
+        g_ids = [int(g) for g in genres_str.split(',')]
+        target = random.choice(g_ids)
+        res = await kinopoisk_api.search_films_by_genre(target, page=random.randint(1, 3))
+        await send_film_results(message, res.get('items', []), "🎲 Рекомендация по вашим жанрам", user_id)
+        return
 
     await message.answer(
-        "😔 Мне не хватает данных. Отметьте фильмы как «Просмотрено» или сохраните жанры через /save_genres.")
+        "😔 Я пока мало о вас знаю.\nОтметьте фильмы как «Просмотрено» или просто поищите фильмы по жанрам!",
+        reply_markup=get_main_menu())
 
 
-@router.message(Command("save_genres"))
-async def cmd_save_genres(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("✍️ Введите ID жанров через запятую:")
-    await state.set_state(FilmSearchStates.waiting_for_multiple_genres)
-
-
-@router.message(FilmSearchStates.waiting_for_multiple_genres)
-async def process_multiple_genres(message: Message, state: FSMContext):
-    try:
-        text = message.text.strip()
-        ids = [int(x.strip()) for x in text.split(',') if x.strip().isdigit()]
-        if not ids: raise ValueError
-        await db.set_user_genres(message.from_user.id, text)
-        await message.answer("✅ Жанры сохранены!")
-        await state.clear()
-    except ValueError:
-        await message.answer("❌ Введите числа.")
-
-
-# --- ПОИСК ПО ЛЮДЯМ ---
-async def process_person_search(message: Message, state: FSMContext, profession: str):
-    name = message.text.strip()
-    await message.answer(f"⏳ Ищу: {name}...")
-    persons = await kinopoisk_api.search_person_by_name(name)
-    if not persons:
-        await message.answer("❌ Персона не найдена.")
-        await state.clear()
-        return
-    person = persons[0]
-    pid = person.get('kinopoiskId') or person.get('personId')
-    p_name = person.get('nameRu') or person.get('nameEn')
-    await message.answer(f"👤 Найдена персона: <b>{p_name}</b>. Загружаю фильмографию...")
-    result = await kinopoisk_api.search_films_by_person(pid, profession)
-    if 'error' in result:
-        await message.answer("❌ Ошибка API")
-        await state.clear()
-        return
-    films = result.get('items', [])
-
-    await message.answer("⏳ Подгружаю детали...")
-    top_5 = films[:5]
-    tasks = [kinopoisk_api.get_film_details(f.get('filmId') or f.get('kinopoiskId')) for f in top_5]
-    details = await asyncio.gather(*tasks)
-    enriched = [d if 'error' not in d else o for d, o in zip(details, top_5)]
-    final = enriched + films[5:]
-
-    role = "Актёр" if profession == 'ACTOR' else "Режиссёр"
-    await send_film_results(message, final, f"🎬 Фильмография ({role})", message.from_user.id)
-    await state.clear()
-
-
-@router.message(Command("search_actor"))
-async def cmd_actor(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("🎭 Введите имя актёра:")
-    await state.set_state(FilmSearchStates.waiting_for_actor_name)
-
-
-@router.message(FilmSearchStates.waiting_for_actor_name)
-async def process_actor(message: Message, state: FSMContext):
-    await process_person_search(message, state, 'ACTOR')
-
-
-@router.message(Command("search_director"))
-async def cmd_director(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("🎬 Введите имя режиссёра:")
-    await state.set_state(FilmSearchStates.waiting_for_director_name)
-
-
-@router.message(FilmSearchStates.waiting_for_director_name)
-async def process_director(message: Message, state: FSMContext):
-    await process_person_search(message, state, 'DIRECTOR')
-
-
-# --- ПОИСК ПО НАЗВАНИЮ ---
 @router.message(Command("search_film"))
 async def cmd_search_film(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("🔎 Введите название:")
+    await message.answer("🔎 Введите название фильма:")
     await state.set_state(FilmSearchStates.waiting_for_film_name)
 
 
 @router.message(FilmSearchStates.waiting_for_film_name)
 async def process_film_name(message: Message, state: FSMContext):
-    film_name = message.text.strip()
-    await message.answer(f"⏳ Ищу «{film_name}»...")
-    result = await kinopoisk_api.search_films_by_keyword(film_name)
-    films = result.get('items', [])
-    await send_film_results(message, films, f"🔎 Результаты: «{film_name}»", message.from_user.id)
+    name = message.text.strip()
+    res = await kinopoisk_api.search_films_by_keyword(name)
+    await send_film_results(message, res.get('items', []), f"🔎 Поиск: {name}", message.from_user.id)
     await state.clear()
 
 
-# --- СПИСКИ ---
+@router.message(Command("search_year"))
+async def cmd_search_year(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("📅 Введите год (например: 2023):")
+    await state.set_state(FilmSearchStates.waiting_for_year)
+
+
+@router.message(FilmSearchStates.waiting_for_year)
+async def process_year(message: Message, state: FSMContext):
+    if not message.text.isdigit():
+        await message.answer("❌ Введите число.")
+        return
+    res = await kinopoisk_api.search_films_by_year(int(message.text))
+    await send_film_results(message, res.get('items', []), f"📅 Фильмы {message.text} года", message.from_user.id)
+    await state.clear()
+
+
 @router.message(Command("my_watched"))
 async def cmd_my_watched(message: Message, state: FSMContext):
     await state.clear()
     films = await db.get_user_films_full(message.from_user.id, 'watched')
     if not films:
-        await message.answer("Список пуст.")
+        await message.answer("Список пуст.", reply_markup=get_main_menu())
         return
-    text = "👁 <b>Просмотрено:</b>\n\n"
-    for title, fid in films:
-        text += f"• /film_{fid} — {title}\n"
-    await message.answer(text)
+    text = "👁 <b>Просмотрено:</b>\n\n" + "\n".join([f"• /film_{fid} — {t}" for t, fid in films])
+    await message.answer(text, reply_markup=get_main_menu())
 
 
-@router.message(Command("my_plan"))
-async def cmd_my_plan(message: Message, state: FSMContext):
+@router.message(F.text.regexp(r"^/film_(\d+)$"))
+async def show_one_film(message: Message, state: FSMContext):
     await state.clear()
-    films = await db.get_user_films_full(message.from_user.id, 'plan')
-    if not films:
-        await message.answer("Список пуст.")
-        return
-    text = "🔖 <b>Буду смотреть:</b>\n\n"
-    for title, fid in films:
-        text += f"• /film_{fid} — {title}\n"
-    await message.answer(text)
+    fid = int(message.text.split('_')[1])
+    film = await kinopoisk_api.get_film_details(fid)
+    if 'error' not in film:
+        await send_film_results(message, [film], "", message.from_user.id)
+    else:
+        await message.answer("❌ Ошибка загрузки")
+
+
+@router.callback_query(F.data.startswith("act_"))
+async def process_film_action(callback: CallbackQuery):
+    _, action, fid = callback.data.split("_")
+    fid = int(fid)
+    uid = callback.from_user.id
+
+    # Получаем название
+    try:
+        det = await kinopoisk_api.get_film_details(fid)
+        title = det.get('nameRu') or det.get('nameOriginal') or 'Фильм'
+    except:
+        title = 'Фильм'
+
+    if action == 'watched':
+        await db.add_film_to_list(uid, fid, title, 'watched')
+        await callback.answer("✅ В просмотренные")
+    elif action == 'plan':
+        await db.add_film_to_list(uid, fid, title, 'plan')
+        await callback.answer("🔖 В планы")
+    elif action == 'ignore':
+        await db.add_film_to_list(uid, fid, title, 'ignored')
+        await callback.answer()
+        try:
+            await callback.message.delete()
+        except:
+            pass
