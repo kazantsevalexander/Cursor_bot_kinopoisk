@@ -50,6 +50,7 @@ async def send_film_results(message: Message, films: list, title: str, user_id: 
         await message.answer(f"{title}\n\n🎉 Все фильмы из этой выборки вы уже видели или скрыли!")
         return
 
+    # Если это одиночный просмотр (через /film_ID), заголовок можно не писать, если он пустой
     if title:
         await message.answer(f"{title} (Топ результатов):")
 
@@ -108,7 +109,7 @@ async def send_film_results(message: Message, films: list, title: str, user_id: 
 
         await asyncio.sleep(0.3)
 
-    # Список дополнительных фильмов
+    # --- ИЗМЕНЕННЫЙ СПИСОК ДОПОЛНИТЕЛЬНЫХ ФИЛЬМОВ ---
     if len(filtered_films) > 5:
         remaining = filtered_films[5:15]
         text_list = "<b>⬇️ Нажмите на команду, чтобы открыть карточку:</b>\n\n"
@@ -116,23 +117,37 @@ async def send_film_results(message: Message, films: list, title: str, user_id: 
             name = film.get('nameRu') or film.get('nameOriginal')
             year = film.get('year') or '?'
             f_id = film.get('kinopoiskId') or film.get('filmId')
+
+            # Формируем команду /film_ID
+            # Telegram автоматически делает её кликабельной
             text_list += f"{i}. /film_{f_id} — <b>{name}</b> ({year})\n"
 
         await message.answer(text_list)
 
 
-# --- ОТКРЫТИЕ КАРТОЧКИ ПО КЛИКУ ---
+# --- НОВЫЙ ОБРАБОТЧИК: ОТКРЫТИЕ КАРТОЧКИ ПО КЛИКУ ИЗ СПИСКА ---
 @router.message(F.text.regexp(r"^/film_(\d+)$"))
 async def show_one_film(message: Message, state: FSMContext):
-    await state.clear()  # Сбрасываем состояния на всякий случай
+    """Ловит команду /film_12345 и показывает карточку"""
+    await state.clear()
     try:
+        # Извлекаем ID из текста сообщения
         film_id = int(message.text.split('_')[1])
+
         await message.answer("⏳ Загружаю информацию...")
+
+        # Получаем детали фильма
         film = await kinopoisk_api.get_film_details(film_id)
+
         if 'error' in film:
             await message.answer("❌ Не удалось загрузить информацию о фильме.")
             return
+
+        # Используем нашу стандартную функцию отправки
+        # Передаем список из одного фильма
+        # title="" чтобы не писать "Топ результатов"
         await send_film_results(message, [film], "", message.from_user.id)
+
     except Exception as e:
         print(f"Error showing film: {e}")
         await message.answer("❌ Ошибка при открытии фильма.")
@@ -174,7 +189,7 @@ async def process_film_action(callback: CallbackQuery):
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
-    await state.clear()  # СБРОС СОСТОЯНИЯ
+    await state.clear()
     await db.add_user(message.from_user.id)
     await message.answer(
         "🎬 <b>Кинопоиск Бот: Полная версия</b>\n\n"
@@ -196,45 +211,13 @@ async def cmd_start(message: Message, state: FSMContext):
 @router.message(Command("help"))
 async def cmd_help(message: Message, state: FSMContext):
     await state.clear()
-    help_text = (
-        "📖 <b>Справочник по Кинопоиск Боту</b>\n\n"
-
-        "🔍 <b>ПОИСК ФИЛЬМОВ</b>\n"
-        "• /search_film — Поиск по названию (сериалы тоже ищет)\n"
-        "• /genres — Выбор жанра (кнопками или по ID)\n"
-        "• /search_year — Поиск по году (например: <i>2023</i>) или интервалу (<i>2010-2015</i>)\n"
-        "• /countries — Поиск по стране (США, Франция, Корея и др.)\n"
-        "• /search_actor — Фильмография актёра\n"
-        "• /search_director — Фильмография режиссёра\n\n"
-
-        "🧠 <b>УМНЫЕ РЕКОМЕНДАЦИИ</b>\n"
-        "• /recommend — <b>Мне повезет!</b> Бот проанализирует ваш список просмотренного и предложит похожие фильмы. Если список пуст — предложит что-то из ваших любимых жанров.\n"
-        "• /save_genres — Настроить любимые жанры (для работы рекомендаций с нуля).\n\n"
-
-        "👤 <b>ЛИЧНАЯ КОЛЛЕКЦИЯ</b>\n"
-        "• /my_watched — Список просмотренного\n"
-        "• /my_plan — Список «Буду смотреть»\n\n"
-
-        "⚙️ <b>КАК ПОЛЬЗОВАТЬСЯ</b>\n"
-        "Под каждым фильмом есть кнопки:\n"
-        "👁 <b>Просмотрено</b> — добавляет в список и учитывает в рекомендациях.\n"
-        "🔖 <b>Буду смотреть</b> — откладывает на потом.\n"
-        "👎 <b>Не интересно</b> — скрывает фильм из ленты и больше никогда его не предложит.\n\n"
-
-        "<i>💡 Совет: Если вы видите в списке команду вида /film_12345, нажмите на неё, чтобы открыть подробную карточку фильма.</i>"
-    )
-    await message.answer(help_text)
-
-@router.message(Command("help"))
-async def cmd_help(message: Message, state: FSMContext):
-    await state.clear()
     await message.answer("Используйте меню команд для навигации.")
 
 
 # --- ЖАНРЫ ---
 @router.message(Command("genres"))
 async def cmd_genres(message: Message, state: FSMContext):
-    await state.clear()  # СБРОС СОСТОЯНИЯ
+    await state.clear()
     await message.answer("⏳ Загружаю жанры...")
     genres = await kinopoisk_api.get_genres()
     if not genres:
@@ -261,7 +244,7 @@ async def process_genre_callback(callback: CallbackQuery):
 # --- СТРАНЫ ---
 @router.message(Command("countries"))
 async def cmd_countries(message: Message, state: FSMContext):
-    await state.clear()  # СБРОС СОСТОЯНИЯ
+    await state.clear()
     await message.answer("⏳ Загружаю список стран...")
     countries = await kinopoisk_api.get_countries()
     if not countries:
@@ -276,7 +259,7 @@ async def cmd_countries(message: Message, state: FSMContext):
 
 @router.message(Command("search_country"))
 async def cmd_search_country(message: Message, state: FSMContext):
-    await state.clear()  # СБРОС СОСТОЯНИЯ
+    await state.clear()
     await message.answer("🌍 Введите ID страны (например, 1 для США, 2 для России):")
     await state.set_state(FilmSearchStates.waiting_for_country)
 
@@ -296,7 +279,7 @@ async def process_country(message: Message, state: FSMContext):
 # --- ГОД ---
 @router.message(Command("search_year"))
 async def cmd_search_year(message: Message, state: FSMContext):
-    await state.clear()  # СБРОС СОСТОЯНИЯ
+    await state.clear()
     await message.answer("📅 Введите год (2023) или интервал (2010-2015):")
     await state.set_state(FilmSearchStates.waiting_for_year)
 
@@ -320,84 +303,57 @@ async def process_year(message: Message, state: FSMContext):
 
 
 # --- ПЕРСОНАЛИЗАЦИЯ ---
-
-
 @router.message(Command("recommend"))
 async def cmd_recommend(message: Message, state: FSMContext):
     await state.clear()
     user_id = message.from_user.id
-
     await message.answer("🤔 Анализирую ваши предпочтения...")
 
-    # СТРАТЕГИЯ 1: Ищем похожие на то, что уже просмотрено
-    # Пытаемся 3 раза найти хороший вариант (чтобы не попасть на фильм без аналогов)
+    # 1. Ищем похожие на просмотренные
     for _ in range(3):
         watched_film = await db.get_random_watched_film(user_id)
-
         if watched_film:
             base_id, base_title = watched_film
-
-            # Запрашиваем похожие
             similars = await kinopoisk_api.get_similars(base_id)
-            if not similars:
-                continue  # У этого фильма нет похожих, пробуем другой
+            if not similars: continue
 
-            # Фильтруем (убираем то, что уже видели)
             excluded_ids = await db.get_user_excluded_ids(user_id)
             clean_similars = [f for f in similars if (f.get('filmId') or f.get('kinopoiskId')) not in excluded_ids]
 
             if clean_similars:
-                # Нашли!
                 await message.answer(f"💡 Вы смотрели <b>«{base_title}»</b>.\nВозможно, вам понравится:")
-
-                # API похожих фильмов возвращает урезанные данные (без года, рейтинга и т.д.)
-                # Нам нужно "обогатить" данные для красивой карточки
-                top_3 = clean_similars[:3]  # Берем топ-3 похожих
-
-                # Подгружаем детали для них
+                top_3 = clean_similars[:3]
                 tasks = [kinopoisk_api.get_film_details(f.get('filmId')) for f in top_3]
                 full_films = await asyncio.gather(*tasks)
-
-                # Убираем ошибки загрузки
                 valid_films = [f for f in full_films if 'error' not in f]
-
                 await send_film_results(message, valid_films, "", user_id)
-                return  # Успех, выходим из функции
+                return
 
-    # СТРАТЕГИЯ 2: Если просмотренных нет (или не нашли похожих), используем Любимые Жанры
+    # 2. Если нет просмотренных, используем жанры
     genres_str = await db.get_user_genres(user_id)
-
     if genres_str:
         try:
             genre_ids = [int(g) for g in genres_str.split(',')]
             target_genre = random.choice(genre_ids)
-
             await message.answer("🎲 Подбираю фильм на основе ваших любимых жанров...")
-
             random_page = random.randint(1, 5)
             result = await kinopoisk_api.search_films_by_genre(target_genre, page=random_page)
             films = result.get('items', [])
-
             if not films:
                 result = await kinopoisk_api.search_films_by_genre(target_genre, page=1)
                 films = result.get('items', [])
-
             await send_film_results(message, films, "🎲 Рекомендация по жанру", user_id)
             return
         except Exception:
             pass
 
-    # СТРАТЕГИЯ 3: Если вообще ничего нет
     await message.answer(
-        "😔 Мне не хватает данных для рекомендации.\n\n"
-        "1. Отметьте фильмы как <b>«Просмотрено»</b> (через поиск).\n"
-        "2. Или сохраните любимые жанры через /save_genres."
-    )
+        "😔 Мне не хватает данных. Отметьте фильмы как «Просмотрено» или сохраните жанры через /save_genres.")
 
 
 @router.message(Command("save_genres"))
 async def cmd_save_genres(message: Message, state: FSMContext):
-    await state.clear()  # СБРОС СОСТОЯНИЯ
+    await state.clear()
     await message.answer("✍️ Введите ID жанров через запятую:")
     await state.set_state(FilmSearchStates.waiting_for_multiple_genres)
 
@@ -449,7 +405,7 @@ async def process_person_search(message: Message, state: FSMContext, profession:
 
 @router.message(Command("search_actor"))
 async def cmd_actor(message: Message, state: FSMContext):
-    await state.clear()  # СБРОС СОСТОЯНИЯ
+    await state.clear()
     await message.answer("🎭 Введите имя актёра:")
     await state.set_state(FilmSearchStates.waiting_for_actor_name)
 
@@ -461,7 +417,7 @@ async def process_actor(message: Message, state: FSMContext):
 
 @router.message(Command("search_director"))
 async def cmd_director(message: Message, state: FSMContext):
-    await state.clear()  # СБРОС СОСТОЯНИЯ
+    await state.clear()
     await message.answer("🎬 Введите имя режиссёра:")
     await state.set_state(FilmSearchStates.waiting_for_director_name)
 
@@ -474,7 +430,7 @@ async def process_director(message: Message, state: FSMContext):
 # --- ПОИСК ПО НАЗВАНИЮ ---
 @router.message(Command("search_film"))
 async def cmd_search_film(message: Message, state: FSMContext):
-    await state.clear()  # СБРОС СОСТОЯНИЯ
+    await state.clear()
     await message.answer("🔎 Введите название:")
     await state.set_state(FilmSearchStates.waiting_for_film_name)
 
@@ -492,7 +448,7 @@ async def process_film_name(message: Message, state: FSMContext):
 # --- СПИСКИ ---
 @router.message(Command("my_watched"))
 async def cmd_my_watched(message: Message, state: FSMContext):
-    await state.clear()  # СБРОС СОСТОЯНИЯ
+    await state.clear()
     films = await db.get_user_films_full(message.from_user.id, 'watched')
     if not films:
         await message.answer("Список пуст.")
@@ -505,7 +461,7 @@ async def cmd_my_watched(message: Message, state: FSMContext):
 
 @router.message(Command("my_plan"))
 async def cmd_my_plan(message: Message, state: FSMContext):
-    await state.clear()  # СБРОС СОСТОЯНИЯ
+    await state.clear()
     films = await db.get_user_films_full(message.from_user.id, 'plan')
     if not films:
         await message.answer("Список пуст.")
