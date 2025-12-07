@@ -7,6 +7,7 @@ DB_NAME = 'bot_database.db'
 async def init_db():
     """Инициализация базы данных"""
     async with aiosqlite.connect(DB_NAME) as db:
+        # Таблица пользователей (любимые жанры)
         await db.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -14,6 +15,7 @@ async def init_db():
             )
         ''')
 
+        # Таблица фильмов (просмотрено, планы, скрыто)
         await db.execute('''
             CREATE TABLE IF NOT EXISTS user_films (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,30 +59,27 @@ async def add_film_to_list(user_id: int, film_id: int, title: str, list_type: st
         await db.commit()
 
 
-async def get_user_films_ids(user_id: int, list_type: str = 'watched'):
-    """Получает список ID фильмов конкретного типа"""
-    async with aiosqlite.connect(DB_NAME) as db:
-        query = 'SELECT film_id FROM user_films WHERE user_id = ? AND list_type = ?'
-        async with db.execute(query, (user_id, list_type)) as cursor:
-            rows = await cursor.fetchall()
-            return [row[0] for row in rows]
-
-
-# --- НОВАЯ ФУНКЦИЯ ---
 async def get_user_excluded_ids(user_id: int):
-    """Получает ID фильмов, которые не нужно показывать (просмотренные + скрытые)"""
+    """Получает ID фильмов, которые не нужно показывать (watched + ignored)"""
     async with aiosqlite.connect(DB_NAME) as db:
-        # Выбираем фильмы, где тип либо 'watched', либо 'ignored'
         query = "SELECT film_id FROM user_films WHERE user_id = ? AND list_type IN ('watched', 'ignored')"
         async with db.execute(query, (user_id,)) as cursor:
             rows = await cursor.fetchall()
             return [row[0] for row in rows]
 
 
-# ---------------------
-
 async def get_user_films_full(user_id: int, list_type: str):
+    """Получает список фильмов с названиями"""
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute('SELECT film_title, film_id FROM user_films WHERE user_id = ? AND list_type = ?',
                               (user_id, list_type)) as cursor:
             return await cursor.fetchall()
+
+
+async def get_random_watched_film(user_id: int):
+    """Возвращает ID случайного просмотренного фильма для рекомендаций"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        query = "SELECT film_id, film_title FROM user_films WHERE user_id = ? AND list_type = 'watched' ORDER BY RANDOM() LIMIT 1"
+        async with db.execute(query, (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            return row if row else None

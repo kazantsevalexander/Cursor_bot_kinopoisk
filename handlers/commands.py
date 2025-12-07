@@ -55,7 +55,7 @@ async def send_film_results(message: Message, films: list, title: str, user_id: 
 
     top_films = filtered_films[:5]
 
-    # Загружаем режиссеров
+    # Загружаем режиссеров параллельно
     director_tasks = [kinopoisk_api.get_directors(f.get('kinopoiskId') or f.get('filmId')) for f in top_films]
     directors_list = await asyncio.gather(*director_tasks)
 
@@ -124,7 +124,7 @@ async def send_film_results(message: Message, films: list, title: str, user_id: 
 # --- ОТКРЫТИЕ КАРТОЧКИ ПО КЛИКУ ---
 @router.message(F.text.regexp(r"^/film_(\d+)$"))
 async def show_one_film(message: Message, state: FSMContext):
-    await state.clear()  # Сбрасываем состояния на всякий случай
+    await state.clear()
     try:
         film_id = int(message.text.split('_')[1])
         await message.answer("⏳ Загружаю информацию...")
@@ -174,7 +174,7 @@ async def process_film_action(callback: CallbackQuery):
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
-    await state.clear()  # СБРОС СОСТОЯНИЯ
+    await state.clear()
     await db.add_user(message.from_user.id)
     await message.answer(
         "🎬 <b>Кинопоиск Бот: Полная версия</b>\n\n"
@@ -229,7 +229,7 @@ async def cmd_help(message: Message, state: FSMContext):
 # --- ЖАНРЫ ---
 @router.message(Command("genres"))
 async def cmd_genres(message: Message, state: FSMContext):
-    await state.clear()  # СБРОС СОСТОЯНИЯ
+    await state.clear()
     await message.answer("⏳ Загружаю жанры...")
     genres = await kinopoisk_api.get_genres()
     if not genres:
@@ -256,7 +256,7 @@ async def process_genre_callback(callback: CallbackQuery):
 # --- СТРАНЫ ---
 @router.message(Command("countries"))
 async def cmd_countries(message: Message, state: FSMContext):
-    await state.clear()  # СБРОС СОСТОЯНИЯ
+    await state.clear()
     await message.answer("⏳ Загружаю список стран...")
     countries = await kinopoisk_api.get_countries()
     if not countries:
@@ -271,7 +271,7 @@ async def cmd_countries(message: Message, state: FSMContext):
 
 @router.message(Command("search_country"))
 async def cmd_search_country(message: Message, state: FSMContext):
-    await state.clear()  # СБРОС СОСТОЯНИЯ
+    await state.clear()
     await message.answer("🌍 Введите ID страны (например, 1 для США, 2 для России):")
     await state.set_state(FilmSearchStates.waiting_for_country)
 
@@ -291,7 +291,7 @@ async def process_country(message: Message, state: FSMContext):
 # --- ГОД ---
 @router.message(Command("search_year"))
 async def cmd_search_year(message: Message, state: FSMContext):
-    await state.clear()  # СБРОС СОСТОЯНИЯ
+    await state.clear()
     await message.answer("📅 Введите год (2023) или интервал (2010-2015):")
     await state.set_state(FilmSearchStates.waiting_for_year)
 
@@ -314,33 +314,58 @@ async def process_year(message: Message, state: FSMContext):
         await message.answer("❌ Некорректный формат.")
 
 
-# --- ПЕРСОНАЛИЗАЦИЯ ---
+# --- УМНЫЕ РЕКОМЕНДАЦИИ ---
 @router.message(Command("recommend"))
 async def cmd_recommend(message: Message, state: FSMContext):
-    await state.clear()  # СБРОС СОСТОЯНИЯ
+    await state.clear()
     user_id = message.from_user.id
+    await message.answer("🤔 Анализирую ваши предпочтения...")
+
+    # 1. Ищем похожие на просмотренные
+    for _ in range(3):
+        watched_film = await db.get_random_watched_film(user_id)
+        if watched_film:
+            base_id, base_title = watched_film
+            similars = await kinopoisk_api.get_similars(base_id)
+            if not similars: continue
+
+            excluded_ids = await db.get_user_excluded_ids(user_id)
+            clean_similars = [f for f in similars if (f.get('filmId') or f.get('kinopoiskId')) not in excluded_ids]
+
+            if clean_similars:
+                await message.answer(f"💡 Вы смотрели <b>«{base_title}»</b>.\nВозможно, вам понравится:")
+                top_3 = clean_similars[:3]
+                tasks = [kinopoisk_api.get_film_details(f.get('filmId')) for f in top_3]
+                full_films = await asyncio.gather(*tasks)
+                valid_films = [f for f in full_films if 'error' not in f]
+                await send_film_results(message, valid_films, "", user_id)
+                return
+
+    # 2. Если нет просмотренных, используем жанры
     genres_str = await db.get_user_genres(user_id)
-    if not genres_str:
-        await message.answer("❌ Сохраните жанры через /save_genres")
-        return
-    try:
-        genre_ids = [int(g) for g in genres_str.split(',')]
-        target_genre = random.choice(genre_ids)
-        await message.answer("🎲 Подбираю фильм...")
-        random_page = random.randint(1, 5)
-        result = await kinopoisk_api.search_films_by_genre(target_genre, page=random_page)
-        films = result.get('items', [])
-        if not films:
-            result = await kinopoisk_api.search_films_by_genre(target_genre, page=1)
+    if genres_str:
+        try:
+            genre_ids = [int(g) for g in genres_str.split(',')]
+            target_genre = random.choice(genre_ids)
+            await message.answer("🎲 Подбираю фильм на основе ваших любимых жанров...")
+            random_page = random.randint(1, 5)
+            result = await kinopoisk_api.search_films_by_genre(target_genre, page=random_page)
             films = result.get('items', [])
-        await send_film_results(message, films, "🎲 Рекомендация", user_id)
-    except Exception:
-        await message.answer("Ошибка.")
+            if not films:
+                result = await kinopoisk_api.search_films_by_genre(target_genre, page=1)
+                films = result.get('items', [])
+            await send_film_results(message, films, "🎲 Рекомендация по жанру", user_id)
+            return
+        except Exception:
+            pass
+
+    await message.answer(
+        "😔 Мне не хватает данных. Отметьте фильмы как «Просмотрено» или сохраните жанры через /save_genres.")
 
 
 @router.message(Command("save_genres"))
 async def cmd_save_genres(message: Message, state: FSMContext):
-    await state.clear()  # СБРОС СОСТОЯНИЯ
+    await state.clear()
     await message.answer("✍️ Введите ID жанров через запятую:")
     await state.set_state(FilmSearchStates.waiting_for_multiple_genres)
 
@@ -392,7 +417,7 @@ async def process_person_search(message: Message, state: FSMContext, profession:
 
 @router.message(Command("search_actor"))
 async def cmd_actor(message: Message, state: FSMContext):
-    await state.clear()  # СБРОС СОСТОЯНИЯ
+    await state.clear()
     await message.answer("🎭 Введите имя актёра:")
     await state.set_state(FilmSearchStates.waiting_for_actor_name)
 
@@ -404,7 +429,7 @@ async def process_actor(message: Message, state: FSMContext):
 
 @router.message(Command("search_director"))
 async def cmd_director(message: Message, state: FSMContext):
-    await state.clear()  # СБРОС СОСТОЯНИЯ
+    await state.clear()
     await message.answer("🎬 Введите имя режиссёра:")
     await state.set_state(FilmSearchStates.waiting_for_director_name)
 
@@ -417,7 +442,7 @@ async def process_director(message: Message, state: FSMContext):
 # --- ПОИСК ПО НАЗВАНИЮ ---
 @router.message(Command("search_film"))
 async def cmd_search_film(message: Message, state: FSMContext):
-    await state.clear()  # СБРОС СОСТОЯНИЯ
+    await state.clear()
     await message.answer("🔎 Введите название:")
     await state.set_state(FilmSearchStates.waiting_for_film_name)
 
@@ -435,7 +460,7 @@ async def process_film_name(message: Message, state: FSMContext):
 # --- СПИСКИ ---
 @router.message(Command("my_watched"))
 async def cmd_my_watched(message: Message, state: FSMContext):
-    await state.clear()  # СБРОС СОСТОЯНИЯ
+    await state.clear()
     films = await db.get_user_films_full(message.from_user.id, 'watched')
     if not films:
         await message.answer("Список пуст.")
@@ -448,7 +473,7 @@ async def cmd_my_watched(message: Message, state: FSMContext):
 
 @router.message(Command("my_plan"))
 async def cmd_my_plan(message: Message, state: FSMContext):
-    await state.clear()  # СБРОС СОСТОЯНИЯ
+    await state.clear()
     films = await db.get_user_films_full(message.from_user.id, 'plan')
     if not films:
         await message.answer("Список пуст.")
