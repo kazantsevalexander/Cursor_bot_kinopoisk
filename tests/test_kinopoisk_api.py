@@ -4,7 +4,6 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 import aiohttp
-from aiohttp import ClientResponse, ClientSession
 
 from services.kinopoisk_api import KinopoiskAPI
 
@@ -28,16 +27,9 @@ async def test_get_genres_success(api):
         ]
     }
     
-    mock_response = MagicMock(spec=ClientResponse)
-    mock_response.status = 200
-    mock_response.json = AsyncMock(return_value=mock_response_data)
-    
-    mock_session = MagicMock(spec=ClientSession)
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=None)
-    mock_session.get = MagicMock(return_value=mock_response.__aenter__())
-    
-    with patch('aiohttp.ClientSession', return_value=mock_session):
+    # Мокируем _make_request напрямую
+    with patch.object(api, '_make_request', new_callable=AsyncMock) as mock_request:
+        mock_request.return_value = mock_response_data
         result = await api.get_genres()
     
     assert len(result) == 2
@@ -48,16 +40,9 @@ async def test_get_genres_success(api):
 @pytest.mark.asyncio
 async def test_get_genres_error(api):
     """Тест получения жанров - ошибка API"""
-    mock_response = MagicMock(spec=ClientResponse)
-    mock_response.status = 500
-    mock_response.text = AsyncMock(return_value="Internal Server Error")
-    
-    mock_session = MagicMock(spec=ClientSession)
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=None)
-    mock_session.get = MagicMock(return_value=mock_response.__aenter__())
-    
-    with patch('aiohttp.ClientSession', return_value=mock_session):
+    # Мокируем _make_request с ошибкой
+    with patch.object(api, '_make_request', new_callable=AsyncMock) as mock_request:
+        mock_request.return_value = {'error': True, 'status': 500, 'message': 'Internal Server Error'}
         result = await api.get_genres()
     
     assert result == []
@@ -78,16 +63,8 @@ async def test_search_films_by_genre_success(api):
         'total': 1
     }
     
-    mock_response = MagicMock(spec=ClientResponse)
-    mock_response.status = 200
-    mock_response.json = AsyncMock(return_value=mock_response_data)
-    
-    mock_session = MagicMock(spec=ClientSession)
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=None)
-    mock_session.get = MagicMock(return_value=mock_response.__aenter__())
-    
-    with patch('aiohttp.ClientSession', return_value=mock_session):
+    with patch.object(api, '_make_request', new_callable=AsyncMock) as mock_request:
+        mock_request.return_value = mock_response_data
         result = await api.search_films_by_genre(genre_id=1)
     
     assert 'items' in result
@@ -98,16 +75,8 @@ async def test_search_films_by_genre_success(api):
 @pytest.mark.asyncio
 async def test_search_films_by_genre_error(api):
     """Тест поиска фильмов по жанру - ошибка API"""
-    mock_response = MagicMock(spec=ClientResponse)
-    mock_response.status = 404
-    mock_response.text = AsyncMock(return_value="Not Found")
-    
-    mock_session = MagicMock(spec=ClientSession)
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=None)
-    mock_session.get = MagicMock(return_value=mock_response.__aenter__())
-    
-    with patch('aiohttp.ClientSession', return_value=mock_session):
+    with patch.object(api, '_make_request', new_callable=AsyncMock) as mock_request:
+        mock_request.return_value = {'error': True, 'status': 404, 'message': 'Not Found'}
         result = await api.search_films_by_genre(genre_id=999)
     
     assert 'error' in result
@@ -129,16 +98,8 @@ async def test_search_films_by_multiple_genres_success(api):
         'total': 1
     }
     
-    mock_response = MagicMock(spec=ClientResponse)
-    mock_response.status = 200
-    mock_response.json = AsyncMock(return_value=mock_response_data)
-    
-    mock_session = MagicMock(spec=ClientSession)
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=None)
-    mock_session.get = MagicMock(return_value=mock_response.__aenter__())
-    
-    with patch('aiohttp.ClientSession', return_value=mock_session):
+    with patch.object(api, '_make_request', new_callable=AsyncMock) as mock_request:
+        mock_request.return_value = mock_response_data
         result = await api.search_films_by_multiple_genres(genre_ids=[1, 2])
     
     assert 'items' in result
@@ -160,16 +121,8 @@ async def test_search_films_by_year_single_year(api):
         'total': 1
     }
     
-    mock_response = MagicMock(spec=ClientResponse)
-    mock_response.status = 200
-    mock_response.json = AsyncMock(return_value=mock_response_data)
-    
-    mock_session = MagicMock(spec=ClientSession)
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=None)
-    mock_session.get = MagicMock(return_value=mock_response.__aenter__())
-    
-    with patch('aiohttp.ClientSession', return_value=mock_session):
+    with patch.object(api, '_make_request', new_callable=AsyncMock) as mock_request:
+        mock_request.return_value = mock_response_data
         result = await api.search_films_by_year(year=2020)
     
     assert 'items' in result
@@ -184,16 +137,8 @@ async def test_search_films_by_year_range(api):
         'total': 0
     }
     
-    mock_response = MagicMock(spec=ClientResponse)
-    mock_response.status = 200
-    mock_response.json = AsyncMock(return_value=mock_response_data)
-    
-    mock_session = MagicMock(spec=ClientSession)
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=None)
-    mock_session.get = MagicMock(return_value=mock_response.__aenter__())
-    
-    with patch('aiohttp.ClientSession', return_value=mock_session):
+    with patch.object(api, '_make_request', new_callable=AsyncMock) as mock_request:
+        mock_request.return_value = mock_response_data
         result = await api.search_films_by_year(year_from=2010, year_to=2020)
     
     assert 'items' in result
@@ -210,16 +155,8 @@ async def test_search_person_by_name_success(api):
         }
     ]
     
-    mock_response = MagicMock(spec=ClientResponse)
-    mock_response.status = 200
-    mock_response.json = AsyncMock(return_value=mock_response_data)
-    
-    mock_session = MagicMock(spec=ClientSession)
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=None)
-    mock_session.get = MagicMock(return_value=mock_response.__aenter__())
-    
-    with patch('aiohttp.ClientSession', return_value=mock_session):
+    with patch.object(api, '_make_request', new_callable=AsyncMock) as mock_request:
+        mock_request.return_value = mock_response_data
         result = await api.search_person_by_name("Тестовый актёр")
     
     assert len(result) == 1
@@ -229,16 +166,8 @@ async def test_search_person_by_name_success(api):
 @pytest.mark.asyncio
 async def test_search_person_by_name_not_found(api):
     """Тест поиска персоны по имени - не найдено"""
-    mock_response = MagicMock(spec=ClientResponse)
-    mock_response.status = 404
-    mock_response.text = AsyncMock(return_value="Not Found")
-    
-    mock_session = MagicMock(spec=ClientSession)
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=None)
-    mock_session.get = MagicMock(return_value=mock_response.__aenter__())
-    
-    with patch('aiohttp.ClientSession', return_value=mock_session):
+    with patch.object(api, '_make_request', new_callable=AsyncMock) as mock_request:
+        mock_request.return_value = {'error': True, 'status': 404, 'message': 'Not Found'}
         result = await api.search_person_by_name("Несуществующий")
     
     assert result == []
@@ -258,16 +187,8 @@ async def test_search_films_by_person_success(api):
         ]
     }
     
-    mock_response = MagicMock(spec=ClientResponse)
-    mock_response.status = 200
-    mock_response.json = AsyncMock(return_value=mock_response_data)
-    
-    mock_session = MagicMock(spec=ClientSession)
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=None)
-    mock_session.get = MagicMock(return_value=mock_response.__aenter__())
-    
-    with patch('aiohttp.ClientSession', return_value=mock_session):
+    with patch.object(api, '_make_request', new_callable=AsyncMock) as mock_request:
+        mock_request.return_value = mock_response_data
         result = await api.search_films_by_person(person_id=456, profession='ACTOR')
     
     assert 'items' in result
@@ -277,16 +198,8 @@ async def test_search_films_by_person_success(api):
 @pytest.mark.asyncio
 async def test_search_films_by_person_error(api):
     """Тест поиска фильмов по персоне - ошибка API"""
-    mock_response = MagicMock(spec=ClientResponse)
-    mock_response.status = 500
-    mock_response.text = AsyncMock(return_value="Internal Server Error")
-    
-    mock_session = MagicMock(spec=ClientSession)
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=None)
-    mock_session.get = MagicMock(return_value=mock_response.__aenter__())
-    
-    with patch('aiohttp.ClientSession', return_value=mock_session):
+    with patch.object(api, '_make_request', new_callable=AsyncMock) as mock_request:
+        mock_request.return_value = {'error': True, 'status': 500, 'message': 'Internal Server Error'}
         result = await api.search_films_by_person(person_id=999)
     
     assert 'error' in result
@@ -295,11 +208,21 @@ async def test_search_films_by_person_error(api):
 @pytest.mark.asyncio
 async def test_make_request_connection_error(api):
     """Тест обработки ошибки соединения"""
-    mock_session = MagicMock(spec=ClientSession)
-    mock_session.__aenter__ = AsyncMock(side_effect=aiohttp.ClientError("Connection error"))
-    mock_session.__aexit__ = AsyncMock(return_value=None)
-    
-    with patch('aiohttp.ClientSession', return_value=mock_session):
+    # Мокируем ClientSession так, чтобы выбрасывалась ошибка при вызове get()
+    with patch('aiohttp.ClientSession') as mock_session_class:
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+        
+        # Создаем мок ответа, который выбрасывает ошибку при входе в контекст
+        mock_response = MagicMock()
+        mock_response.__aenter__ = AsyncMock(side_effect=aiohttp.ClientError("Connection error"))
+        mock_response.__aexit__ = AsyncMock(return_value=None)
+        
+        # get() должен возвращать объект, который является контекстным менеджером
+        mock_session.get = MagicMock(return_value=mock_response)
+        mock_session_class.return_value = mock_session
+        
         result = await api._make_request("test/endpoint")
     
     assert 'error' in result
@@ -316,18 +239,9 @@ async def test_get_film_by_id_success(api):
         'rating': '8.5'
     }
     
-    mock_response = MagicMock(spec=ClientResponse)
-    mock_response.status = 200
-    mock_response.json = AsyncMock(return_value=mock_response_data)
-    
-    mock_session = MagicMock(spec=ClientSession)
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=None)
-    mock_session.get = MagicMock(return_value=mock_response.__aenter__())
-    
-    with patch('aiohttp.ClientSession', return_value=mock_session):
+    with patch.object(api, '_make_request', new_callable=AsyncMock) as mock_request:
+        mock_request.return_value = mock_response_data
         result = await api.get_film_by_id(film_id=123)
     
     assert result['kinopoiskId'] == 123
     assert result['nameRu'] == 'Тестовый фильм'
-

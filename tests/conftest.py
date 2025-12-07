@@ -73,10 +73,13 @@ def callback_query(user, chat, message):
 def state():
     """Фикстура для создания FSM контекста"""
     storage = MemoryStorage()
-    return FSMContext(
-        storage=storage,
-        key=storage.resolve_key(user_id=123456789, chat_id=123456789)
+    from aiogram.fsm.storage.base import StorageKey
+    key = StorageKey(
+        chat_id=123456789,
+        user_id=123456789,
+        bot_id=123456
     )
+    return FSMContext(storage=storage, key=key)
 
 
 @pytest.fixture
