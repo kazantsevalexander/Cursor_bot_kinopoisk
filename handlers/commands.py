@@ -23,7 +23,7 @@ class FilmSearchStates(StatesGroup):
     waiting_for_country = State()
 
 
-# --- КЛАВИАТУРА ---
+# --- КЛАВИАТУРА (Единая для всех) ---
 def get_film_keyboard(film_id: int):
     builder = InlineKeyboardBuilder()
     builder.button(text="👁 Просмотрено", callback_data=f"act_watched_{film_id}")
@@ -33,40 +33,62 @@ def get_film_keyboard(film_id: int):
     return builder.as_markup()
 
 
-# --- ОТПРАВКА РЕЗУЛЬТАТОВ ---
+# --- УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ОТПРАВКИ ---
 async def send_film_results(message: Message, films: list, title: str, user_id: int):
+    """
+    Эта функция используется ВСЕМИ обработчиками поиска.
+    Она гарантирует, что везде будут кнопки и правильные ссылки.
+    """
     if not films:
         await message.answer("😔 Фильмы не найдены.")
         return
 
-    excluded_ids = await db.get_user_excluded_ids(user_id)
-    filtered_films = []
-    for f in films:
-        fid = f.get('kinopoiskId') or f.get('filmId')
-        if fid and fid not in excluded_ids:
-            filtered_films.append(f)
+    # Фильтрация (исключаем скрытые)
+    # Если список состоит из 1 фильма (открыли карточку), фильтрацию не делаем
+    is_single_view = len(films) == 1
 
-    if not filtered_films:
+    if not is_single_view:
+        excluded_ids = await db.get_user_excluded_ids(user_id)
+        filtered_films = []
+        for f in films:
+            fid = f.get('kinopoiskId') or f.get('filmId')
+            if fid and fid not in excluded_ids:
+                filtered_films.append(f)
+    else:
+        filtered_films = films
+
+    if not filtered_films and not is_single_view:
         await message.answer(f"{title}\n\n🎉 Все фильмы из этой выборки вы уже видели или скрыли!")
         return
 
-    # Если это одиночный просмотр (через /film_ID), заголовок можно не писать, если он пустой
     if title:
         await message.answer(f"{title} (Топ результатов):")
 
     top_films = filtered_films[:5]
 
-    # Загружаем режиссеров
-    director_tasks = [kinopoisk_api.get_directors(f.get('kinopoiskId') or f.get('filmId')) for f in top_films]
+    # Загружаем режиссеров для топ-5
+    director_tasks = []
+    for f in top_films:
+        fid = f.get('kinopoiskId') or f.get('filmId')
+        if fid:
+            director_tasks.append(kinopoisk_api.get_directors(fid))
+        else:
+            # Если вдруг ID нет, добавляем заглушку, чтобы порядок не сбился
+            director_tasks.append(asyncio.sleep(0, result="Не указано"))
+
     directors_list = await asyncio.gather(*director_tasks)
 
+    # --- ЦИКЛ ВЫВОДА КАРТОЧЕК ---
     for film, director_name in zip(top_films, directors_list):
+        film_id = film.get('kinopoiskId') or film.get('filmId')
+
+        if not film_id: continue  # Пропускаем битые данные
+
         name_ru = film.get('nameRu') or film.get('nameOriginal') or 'Без названия'
         name_en = film.get('nameEn') or ''
         year = film.get('year')
         rating = film.get('rating') or film.get('ratingKinopoisk') or 'N/A'
         if rating == 'null': rating = 'N/A'
-        film_id = film.get('kinopoiskId') or film.get('filmId')
 
         # Жанры
         genres_list = film.get('genres', [])
@@ -97,6 +119,7 @@ async def send_film_results(message: Message, films: list, title: str, user_id: 
             f"🔗 <a href='{kp_link}'>Перейти на Кинопоиск</a>"
         )
 
+        # !!! ГЛАВНОЕ: ДОБАВЛЯЕМ КНОПКИ !!!
         keyboard = get_film_keyboard(film_id)
 
         try:
@@ -109,7 +132,7 @@ async def send_film_results(message: Message, films: list, title: str, user_id: 
 
         await asyncio.sleep(0.3)
 
-    # --- ИЗМЕНЕННЫЙ СПИСОК ДОПОЛНИТЕЛЬНЫХ ФИЛЬМОВ ---
+    # --- СПИСОК ОСТАЛЬНЫХ (С КОМАНДАМИ /film_ID) ---
     if len(filtered_films) > 5:
         remaining = filtered_films[5:15]
         text_list = "<b>⬇️ Нажмите на команду, чтобы открыть карточку:</b>\n\n"
@@ -118,42 +141,34 @@ async def send_film_results(message: Message, films: list, title: str, user_id: 
             year = film.get('year') or '?'
             f_id = film.get('kinopoiskId') or film.get('filmId')
 
-            # Формируем команду /film_ID
-            # Telegram автоматически делает её кликабельной
+            # !!! ГЛАВНОЕ: ВНУТРЕННЯЯ ССЫЛКА !!!
             text_list += f"{i}. /film_{f_id} — <b>{name}</b> ({year})\n"
 
         await message.answer(text_list)
 
 
-# --- НОВЫЙ ОБРАБОТЧИК: ОТКРЫТИЕ КАРТОЧКИ ПО КЛИКУ ИЗ СПИСКА ---
+# --- ОБРАБОТЧИК ОТКРЫТИЯ КАРТОЧКИ (/film_ID) ---
 @router.message(F.text.regexp(r"^/film_(\d+)$"))
 async def show_one_film(message: Message, state: FSMContext):
-    """Ловит команду /film_12345 и показывает карточку"""
     await state.clear()
     try:
-        # Извлекаем ID из текста сообщения
         film_id = int(message.text.split('_')[1])
-
         await message.answer("⏳ Загружаю информацию...")
 
-        # Получаем детали фильма
         film = await kinopoisk_api.get_film_details(film_id)
-
         if 'error' in film:
-            await message.answer("❌ Не удалось загрузить информацию о фильме.")
+            await message.answer("❌ Не удалось загрузить информацию.")
             return
 
-        # Используем нашу стандартную функцию отправки
-        # Передаем список из одного фильма
-        # title="" чтобы не писать "Топ результатов"
+        # Вызываем ту же функцию, она добавит кнопки!
         await send_film_results(message, [film], "", message.from_user.id)
 
     except Exception as e:
         print(f"Error showing film: {e}")
-        await message.answer("❌ Ошибка при открытии фильма.")
+        await message.answer("❌ Ошибка.")
 
 
-# --- ОБРАБОТЧИКИ ДЕЙСТВИЙ ---
+# --- ОБРАБОТЧИКИ ДЕЙСТВИЙ (КНОПКИ) ---
 @router.callback_query(F.data.startswith("act_"))
 async def process_film_action(callback: CallbackQuery):
     try:
@@ -211,7 +226,23 @@ async def cmd_start(message: Message, state: FSMContext):
 @router.message(Command("help"))
 async def cmd_help(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("Используйте меню команд для навигации.")
+    help_text = (
+        "📖 <b>Справочник</b>\n\n"
+        "🔍 <b>ПОИСК</b>\n"
+        "• /search_film — Поиск по названию\n"
+        "• /genres — Выбор жанра\n"
+        "• /search_year — Поиск по году\n"
+        "• /countries — Поиск по стране\n"
+        "• /search_actor — Фильмография актёра\n\n"
+        "🧠 <b>РЕКОМЕНДАЦИИ</b>\n"
+        "• /recommend — Бот проанализирует просмотренное и предложит похожее.\n"
+        "• /save_genres — Настроить любимые жанры.\n\n"
+        "⚙️ <b>КНОПКИ</b>\n"
+        "👁 <b>Просмотрено</b> — учитывается в рекомендациях.\n"
+        "👎 <b>Не интересно</b> — скрывает фильм навсегда.\n\n"
+        "<i>Нажмите на команду /film_ID в списке, чтобы открыть карточку фильма.</i>"
+    )
+    await message.answer(help_text)
 
 
 # --- ЖАНРЫ ---
@@ -237,6 +268,7 @@ async def process_genre_callback(callback: CallbackQuery):
     genre_id = int(callback.data.split("_")[1])
     await callback.message.answer(f"⏳ Ищу фильмы...")
     result = await kinopoisk_api.search_films_by_genre(genre_id)
+    # ИСПОЛЬЗУЕМ send_film_results
     await send_film_results(callback.message, result.get('items', []), "🎭 Результаты по жанру", callback.from_user.id)
     await callback.answer()
 
@@ -272,6 +304,7 @@ async def process_country(message: Message, state: FSMContext):
     country_id = int(message.text)
     await message.answer("⏳ Ищу фильмы...")
     result = await kinopoisk_api.search_films_by_country(country_id)
+    # ИСПОЛЬЗУЕМ send_film_results
     await send_film_results(message, result.get('items', []), "🌍 Фильмы по стране", message.from_user.id)
     await state.clear()
 
@@ -296,7 +329,11 @@ async def process_year(message: Message, state: FSMContext):
             year = int(text)
         await message.answer("⏳ Ищу фильмы...")
         result = await kinopoisk_api.search_films_by_year(year, y_from, y_to)
+
+        # !!! ВОТ ЗДЕСЬ БЫЛА ОШИБКА В СТАРОЙ ВЕРСИИ, ТЕПЕРЬ ИСПРАВЛЕНО !!!
+        # Мы используем ту же функцию send_film_results, что и везде
         await send_film_results(message, result.get('items', []), "📅 Фильмы по году", message.from_user.id)
+
         await state.clear()
     except ValueError:
         await message.answer("❌ Некорректный формат.")
@@ -399,6 +436,7 @@ async def process_person_search(message: Message, state: FSMContext, profession:
     final = enriched + films[5:]
 
     role = "Актёр" if profession == 'ACTOR' else "Режиссёр"
+    # ИСПОЛЬЗУЕМ send_film_results
     await send_film_results(message, final, f"🎬 Фильмография ({role})", message.from_user.id)
     await state.clear()
 
@@ -441,6 +479,7 @@ async def process_film_name(message: Message, state: FSMContext):
     await message.answer(f"⏳ Ищу «{film_name}»...")
     result = await kinopoisk_api.search_films_by_keyword(film_name)
     films = result.get('items', [])
+    # ИСПОЛЬЗУЕМ send_film_results
     await send_film_results(message, films, f"🔎 Результаты: «{film_name}»", message.from_user.id)
     await state.clear()
 
@@ -455,6 +494,7 @@ async def cmd_my_watched(message: Message, state: FSMContext):
         return
     text = "👁 <b>Просмотрено:</b>\n\n"
     for title, fid in films:
+        # ИСПОЛЬЗУЕМ КОМАНДУ /film_ID
         text += f"• /film_{fid} — {title}\n"
     await message.answer(text)
 
@@ -468,5 +508,6 @@ async def cmd_my_plan(message: Message, state: FSMContext):
         return
     text = "🔖 <b>Буду смотреть:</b>\n\n"
     for title, fid in films:
+        # ИСПОЛЬЗУЕМ КОМАНДУ /film_ID
         text += f"• /film_{fid} — {title}\n"
     await message.answer(text)
