@@ -29,8 +29,18 @@ class KinopoiskAPI:
         response = await self._make_request("v2.2/films/filters")
         return response.get('genres', []) if 'error' not in response else []
 
+    # --- НОВЫЙ МЕТОД: ПОЛУЧЕНИЕ СТРАН ---
+    async def get_countries(self) -> List[Dict]:
+        response = await self._make_request("v2.2/films/filters")
+        return response.get('countries', []) if 'error' not in response else []
+
     async def search_films_by_genre(self, genre_id: int, page: int = 1) -> Dict:
         params = {'genres': genre_id, 'page': page, 'order': 'RATING', 'type': 'FILM'}
+        return await self._make_request("v2.2/films", params)
+
+    # --- НОВЫЙ МЕТОД: ПОИСК ПО СТРАНЕ ---
+    async def search_films_by_country(self, country_id: int, page: int = 1) -> Dict:
+        params = {'countries': country_id, 'page': page, 'order': 'RATING', 'type': 'FILM'}
         return await self._make_request("v2.2/films", params)
 
     async def search_films_by_multiple_genres(self, genre_ids: List[int], page: int = 1) -> Dict:
@@ -51,20 +61,27 @@ class KinopoiskAPI:
         response = await self._make_request("v1/persons", {'name': name})
         return response.get('items', []) if 'error' not in response else []
 
-    # --- НОВЫЙ МЕТОД: ПОЛУЧЕНИЕ ДЕТАЛЕЙ ФИЛЬМА (ДЛЯ ПОСТЕРА) ---
     async def get_film_details(self, film_id: int) -> Dict:
-        """Получает полную информацию о фильме по ID"""
         return await self._make_request(f"v2.2/films/{film_id}")
+
+    async def get_directors(self, film_id: int) -> str:
+        data = await self._make_request("v1/staff", {'filmId': film_id})
+        if isinstance(data, dict) and 'error' in data: return "Не указано"
+        directors = []
+        if isinstance(data, list):
+            for person in data:
+                if person.get('professionKey') == 'DIRECTOR':
+                    name = person.get('nameRu') or person.get('nameEn')
+                    if name: directors.append(name)
+        return ", ".join(directors[:1]) if directors else "Не указано"
 
     async def search_films_by_person(self, person_id: int, profession_key: str = 'ACTOR') -> Dict:
         data = await self._make_request(f"v1/staff/{person_id}")
         if 'error' in data: return data
-
         all_films = data.get('films', [])
         filtered_films = []
         seen_ids = set()
         target_prof = profession_key.upper()
-
         for film in all_films:
             if film.get('professionKey', '').upper() == target_prof:
                 fid = film.get('filmId')
@@ -72,34 +89,17 @@ class KinopoiskAPI:
                     seen_ids.add(fid)
                     rating = film.get('rating')
                     if rating == 'null' or rating is None: rating = 'N/A'
-
                     film['rating'] = rating
                     film['kinopoiskId'] = fid
-                    # Постер здесь все еще None, мы загрузим его позже в commands.py
                     film['posterUrlPreview'] = None
                     filtered_films.append(film)
-
         filtered_films.sort(key=lambda f: float(f.get('rating', 0)) if f.get('rating') != 'N/A' else 0, reverse=True)
-
         return {'items': filtered_films, 'total': len(filtered_films)}
 
     async def search_films_by_keyword(self, keyword: str, page: int = 1) -> Dict:
-        """Ищет фильмы по ключевому слову (названию)"""
         endpoint = "v2.1/films/search-by-keyword"
-        params = {
-            'keyword': keyword,
-            'page': page
-        }
-
+        params = {'keyword': keyword, 'page': page}
         response = await self._make_request(endpoint, params)
-
-        if 'error' in response:
-            return response
-
-        # API v2.1 возвращает список в ключе 'films', а v2.2 в 'items'.
-        # Приводим к единому формату для удобства.
+        if 'error' in response: return response
         items = response.get('films', [])
-        return {
-            'items': items,
-            'total': response.get('searchFilmsCountResult', len(items))
-        }
+        return {'items': items, 'total': response.get('searchFilmsCountResult', len(items))}
